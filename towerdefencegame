@@ -1,0 +1,2010 @@
+import React, { useEffect, useRef, useCallback, useState } from 'react';
+import { GameState, GameMode, Player, Enemy, Tower, Projectile } from '../types/game';
+import { getRandomQuestion } from '../data/securityQuestions';
+import SecurityQuizModal from './SecurityQuizModal';
+import SecurityTipModal from './SecurityTipModal';
+import LevelProgressTracker from './LevelProgressTracker';
+import { getCurrentLevel } from '../data/gameLevels';
+
+interface TowerDefenseGameProps {
+  gameState: GameState;
+  gameMode: GameMode;
+  currentLevel: number;
+  onGameStateChange: (state: GameState) => void;
+  onScoreUpdate: (score: number) => void;
+  onLivesUpdate: (lives: number) => void;
+  onWaveUpdate: (wave: number) => void;
+  onQuizCorrect: () => void;
+  correctAnswersInLevel: number;
+}
+
+const TowerDefenseGame: React.FC<TowerDefenseGameProps> = ({
+  gameState,
+  gameMode,
+  currentLevel,
+  onGameStateChange,
+  onScoreUpdate,
+  onLivesUpdate,
+  onWaveUpdate,
+  onQuizCorrect,
+  correctAnswersInLevel
+}) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const gameLoopRef = useRef<number>();
+  const [selectedTowerType, setSelectedTowerType] = useState<Tower['type']>('archer');
+  const [towers, setTowers] = useState<Tower[]>([]);
+  const [enemies, setEnemies] = useState<Enemy[]>([]);
+  const [projectiles, setProjectiles] = useState<Projectile[]>([]);
+  const [player, setPlayer] = useState<Player>({
+    x: 100,
+    y: 300,
+    health: 100,
+    maxHealth: 100,
+    mana: 50,
+    maxMana: 50,
+    experience: 0,
+    level: 1,
+    abilities: []
+  });
+  const [showQuiz, setShowQuiz] = useState(false);
+  const [currentQuiz, setCurrentQuiz] = useState<any>(null);
+  const [showSecurityTip, setShowSecurityTip] = useState(false);
+  const [currentSecurityTip, setCurrentSecurityTip] = useState<any>(null);
+  const [hasShownFirewallTip, setHasShownFirewallTip] = useState(false);
+  const [hasShownLayeredDefenseTip, setHasShownLayeredDefenseTip] = useState(false);
+  const [hasShownChokepointTip, setHasShownChokepointTip] = useState(false);
+  const [gold, setGold] = useState(1000);
+  const [score, setScore] = useState(0);
+  const [lives, setLives] = useState(25);
+  const [wave, setWave] = useState(1);
+  const [triggeredQuizzes, setTriggeredQuizzes] = useState<Set<string>>(new Set());
+
+  // Current level wave tracking
+  const [currentWaveIndex, setCurrentWaveIndex] = useState(0);
+  const [waveEnemiesSpawned, setWaveEnemiesSpawned] = useState(0);
+  const [waveTimer, setWaveTimer] = useState(0);
+  const [lastSpawnTime, setLastSpawnTime] = useState(0);
+
+  // Level-specific background drawing function
+  const drawLevelBackground = (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, level: number) => {
+    switch (level) {
+      case 1: // The Matrix Awakening - Green digital world
+        {
+          const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+          gradient.addColorStop(0, '#000000');
+          gradient.addColorStop(0.5, '#001100');
+          gradient.addColorStop(1, '#000000');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          
+          // Matrix digital rain
+          ctx.strokeStyle = 'rgba(0, 255, 65, 0.1)';
+          ctx.lineWidth = 1;
+          ctx.font = '12px monospace';
+          ctx.fillStyle = 'rgba(0, 255, 65, 0.1)';
+          for (let x = 0; x < canvas.width; x += 20) {
+            for (let y = 0; y < canvas.height; y += 20) {
+              if (Math.random() < 0.1) {
+                ctx.fillText(Math.random() > 0.5 ? '1' : '0', x, y);
+              }
+            }
+          }
+          
+          // Digital grid
+          ctx.strokeStyle = 'rgba(0, 255, 65, 0.05)';
+          for (let x = 0; x < canvas.width; x += 50) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, canvas.height);
+            ctx.stroke();
+          }
+        }
+        break;
+        
+      case 2: // Zion's Digital Defense - Blue tech fortress
+        {
+          const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+          gradient.addColorStop(0, '#000033');
+          gradient.addColorStop(0.5, '#001155');
+          gradient.addColorStop(1, '#000033');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          
+          // Tech circuit patterns
+          ctx.strokeStyle = 'rgba(0, 150, 255, 0.1)';
+          ctx.lineWidth = 2;
+          for (let x = 0; x < canvas.width; x += 100) {
+            for (let y = 0; y < canvas.height; y += 100) {
+              ctx.strokeRect(x, y, 80, 80);
+              ctx.beginPath();
+              ctx.arc(x + 40, y + 40, 20, 0, Math.PI * 2);
+              ctx.stroke();
+            }
+          }
+          
+          // Zion energy streams
+          ctx.strokeStyle = 'rgba(0, 200, 255, 0.2)';
+          ctx.lineWidth = 3;
+          for (let i = 0; i < 5; i++) {
+            ctx.beginPath();
+            ctx.moveTo(0, i * 120 + 60);
+            ctx.lineTo(canvas.width, i * 120 + 60);
+            ctx.stroke();
+          }
+        }
+        break;
+        
+      case 3: // The Nebuchadnezzar Protocol - Ship interior
+        {
+          const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+          gradient.addColorStop(0, '#330000');
+          gradient.addColorStop(0.5, '#550011');
+          gradient.addColorStop(1, '#330000');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          
+          // Ship hull patterns
+          ctx.fillStyle = 'rgba(100, 50, 50, 0.3)';
+          for (let y = 0; y < canvas.height; y += 40) {
+            ctx.fillRect(0, y, canvas.width, 20);
+          }
+          
+          // Ship corridors
+          ctx.strokeStyle = 'rgba(255, 100, 100, 0.2)';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(0, canvas.height * 0.3);
+          ctx.lineTo(canvas.width, canvas.height * 0.3);
+          ctx.moveTo(0, canvas.height * 0.7);
+          ctx.lineTo(canvas.width, canvas.height * 0.7);
+          ctx.stroke();
+          
+          // Emergency lighting
+          ctx.fillStyle = 'rgba(255, 0, 0, 0.1)';
+          for (let x = 50; x < canvas.width; x += 100) {
+            ctx.beginPath();
+            ctx.arc(x, 30, 15, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        break;
+        
+      case 4: // Machine City Firewall - Dark mechanical
+        {
+          const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+          gradient.addColorStop(0, '#1a0a00');
+          gradient.addColorStop(0.5, '#2a1500');
+          gradient.addColorStop(1, '#1a0a00');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          
+          // Machine city structures
+          ctx.fillStyle = 'rgba(100, 50, 0, 0.2)';
+          for (let x = 0; x < canvas.width; x += 60) {
+            const height = Math.random() * 200 + 100;
+            ctx.fillRect(x, canvas.height - height, 40, height);
+          }
+          
+          // Industrial pipes
+          ctx.strokeStyle = 'rgba(150, 75, 0, 0.3)';
+          ctx.lineWidth = 8;
+          for (let i = 0; i < 4; i++) {
+            ctx.beginPath();
+            ctx.moveTo(0, i * 150 + 75);
+            ctx.lineTo(canvas.width, i * 150 + 100);
+            ctx.stroke();
+          }
+          
+          // Machine sparks
+          ctx.fillStyle = 'rgba(255, 150, 0, 0.4)';
+          for (let i = 0; i < 20; i++) {
+            if (Math.random() < 0.3) {
+              ctx.beginPath();
+              ctx.arc(Math.random() * canvas.width, Math.random() * canvas.height, 2, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+        }
+        break;
+        
+      case 5: // Smith Virus Containment - Corrupted reality
+        {
+          const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+          gradient.addColorStop(0, '#000000');
+          gradient.addColorStop(0.3, '#001100');
+          gradient.addColorStop(0.7, '#110000');
+          gradient.addColorStop(1, '#000000');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          
+          // Corrupted Matrix code
+          ctx.font = '14px monospace';
+          ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
+          for (let x = 0; x < canvas.width; x += 25) {
+            for (let y = 0; y < canvas.height; y += 25) {
+              if (Math.random() < 0.15) {
+                ctx.fillText('S', x, y);
+              }
+            }
+          }
+          
+          // Virus spread pattern
+          ctx.strokeStyle = 'rgba(255, 0, 0, 0.1)';
+          ctx.lineWidth = 2;
+          const centerX = canvas.width / 2;
+          const centerY = canvas.height / 2;
+          for (let i = 0; i < 8; i++) {
+            const angle = (i * Math.PI) / 4;
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.lineTo(
+              centerX + Math.cos(angle) * 300,
+              centerY + Math.sin(angle) * 200
+            );
+            ctx.stroke();
+          }
+          
+          // Glitch effects
+          if (Math.random() < 0.1) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+            ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, 50, 5);
+          }
+        }
+        break;
+        
+      default:
+        // Fallback to level 1 style
+        {
+          const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+          gradient.addColorStop(0, '#000000');
+          gradient.addColorStop(0.5, '#001100');
+          gradient.addColorStop(1, '#000000');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+    }
+  };
+
+  // Level-specific base/fortress drawing function
+  const drawLevelBase = (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, level: number, enemyCount: number) => {
+    switch (level) {
+      case 1: // Matrix Mainframe
+        {
+          ctx.fillStyle = '#00ff41';
+          ctx.shadowColor = '#00ff41';
+          ctx.shadowBlur = 10;
+          ctx.fillRect(0, 0, 120, canvas.height);
+          ctx.shadowBlur = 0;
+          
+          // Matrix interface screens
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(15, 60, 15, 20);
+          ctx.fillRect(90, 60, 15, 20);
+          
+          ctx.fillStyle = '#00ff41';
+          ctx.font = '8px monospace';
+          ctx.fillText('NEO', 17, 72);
+          ctx.fillText('ZIO', 92, 72);
+          
+          // Central console
+          ctx.fillStyle = '#001100';
+          ctx.fillRect(35, 80, 50, 70);
+          ctx.strokeStyle = '#00ff41';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(35, 80, 50, 70);
+          
+          ctx.fillStyle = '#00ff41';
+          ctx.font = '10px monospace';
+          ctx.fillText('MATRIX', 40, 95);
+          ctx.fillText('ACTIVE', 45, 110);
+          ctx.fillText('AGENTS:', 40, 125);
+          ctx.fillText(`${enemyCount}`, 55, 140);
+        }
+        break;
+        
+      case 2: // Zion Command Center
+        {
+          ctx.fillStyle = '#0080ff';
+          ctx.shadowColor = '#0080ff';
+          ctx.shadowBlur = 12;
+          ctx.fillRect(0, 0, 120, canvas.height);
+          ctx.shadowBlur = 0;
+          
+          // Zion architecture
+          ctx.fillStyle = '#004080';
+          for (let i = 0; i < 8; i++) {
+            ctx.fillRect(10, 50 + i * 60, 100, 30);
+          }
+          
+          // Command screens
+          ctx.fillStyle = '#000040';
+          ctx.fillRect(20, 100, 80, 60);
+          ctx.strokeStyle = '#0080ff';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(20, 100, 80, 60);
+          
+          ctx.fillStyle = '#0080ff';
+          ctx.font = '10px monospace';
+          ctx.fillText('ZION DEFENSE', 25, 115);
+          ctx.fillText('STATUS: ACTIVE', 25, 130);
+          ctx.fillText('THREATS:', 25, 145);
+          ctx.fillText(`${enemyCount}`, 75, 145);
+        }
+        break;
+        
+      case 3: // Nebuchadnezzar Bridge
+        {
+          ctx.fillStyle = '#ff4040';
+          ctx.shadowColor = '#ff4040';
+          ctx.shadowBlur = 8;
+          ctx.fillRect(0, 0, 120, canvas.height);
+          ctx.shadowBlur = 0;
+          
+          // Ship hull plating
+          ctx.fillStyle = '#802020';
+          for (let i = 0; i < 10; i++) {
+            ctx.fillRect(5, i * 60, 110, 40);
+          }
+          
+          // Ship controls
+          ctx.fillStyle = '#400000';
+          ctx.fillRect(25, 200, 70, 80);
+          ctx.strokeStyle = '#ff4040';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(25, 200, 70, 80);
+          
+          ctx.fillStyle = '#ff4040';
+          ctx.font = '9px monospace';
+          ctx.fillText('NEBUCHADNEZZAR', 27, 215);
+          ctx.fillText('SHIP DEFENSE', 35, 230);
+          ctx.fillText('HOSTILES:', 35, 250);
+          ctx.fillText(`${enemyCount}`, 75, 250);
+        }
+        break;
+        
+      case 4: // Machine City Core
+        {
+          ctx.fillStyle = '#ff8800';
+          ctx.shadowColor = '#ff8800';
+          ctx.shadowBlur = 15;
+          ctx.fillRect(0, 0, 120, canvas.height);
+          ctx.shadowBlur = 0;
+          
+          // Machine architecture
+          ctx.fillStyle = '#804400';
+          for (let i = 0; i < 6; i++) {
+            const height = 80 + i * 20;
+            ctx.fillRect(10, 50 + i * 80, 100, height);
+          }
+          
+          // Machine core
+          ctx.fillStyle = '#ff4400';
+          ctx.beginPath();
+          ctx.arc(60, 300, 40, 0, Math.PI * 2);
+          ctx.fill();
+          
+          ctx.fillStyle = '#000000';
+          ctx.font = '8px monospace';
+          ctx.fillText('MACHINE CORE', 25, 250);
+          ctx.fillText('FIREWALL ACTIVE', 20, 265);
+          ctx.fillText('INTRUSIONS:', 25, 330);
+          ctx.fillText(`${enemyCount}`, 75, 330);
+        }
+        break;
+        
+      case 5: // Smith Virus Core
+        {
+          // Corrupted base - mix of green and red
+          const gradient = ctx.createLinearGradient(0, 0, 120, 0);
+          gradient.addColorStop(0, '#00ff41');
+          gradient.addColorStop(0.5, '#ff0000');
+          gradient.addColorStop(1, '#00ff41');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, 120, canvas.height);
+          
+          // Corrupted patterns
+          ctx.fillStyle = '#800000';
+          for (let i = 0; i < 12; i++) {
+            if (Math.random() < 0.7) {
+              ctx.fillRect(Math.random() * 120, i * 50, 20, 30);
+            }
+          }
+          
+          // Virus core
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(30, 250, 60, 100);
+          ctx.strokeStyle = '#ff0000';
+          ctx.lineWidth = 3;
+          ctx.strokeRect(30, 250, 60, 100);
+          
+          ctx.fillStyle = '#ff0000';
+          ctx.font = '9px monospace';
+          ctx.fillText('SMITH VIRUS', 35, 270);
+          ctx.fillText('CONTAINMENT', 35, 285);
+          ctx.fillText('REPLICAS:', 40, 320);
+          ctx.fillText(`${enemyCount}`, 75, 320);
+          
+          // Glitch effect on text
+          if (Math.random() < 0.2) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('SMITH VIRUS', 36, 271);
+          }
+        }
+        break;
+    }
+  };
+
+  const drawLevel = (ctx: CanvasRenderingContext2D) => {
+    const level = getCurrentLevel(currentLevel);
+    if (!level) return;
+
+    // Clear background
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw level-specific designs
+    switch (currentLevel) {
+      case 1: // The Matrix Awakening - Digital code streams
+        drawMatrixAwakeningLevel(ctx);
+        break;
+      case 2: // Zion's Digital Defense - Underground bunker
+        drawZionDefenseLevel(ctx);
+        break;
+      case 3: // Nebuchadnezzar Protocol - Ship interior
+        drawNebuchadnezzarLevel(ctx);
+        break;
+      case 4: // Machine City Firewall - Industrial machine city
+        drawMachineCityLevel(ctx);
+        break;
+      case 5: // Smith Virus Containment - Corrupted reality
+        drawSmithVirusLevel(ctx);
+        break;
+      default:
+        drawMatrixAwakeningLevel(ctx);
+    }
+  };
+
+  const drawMatrixAwakeningLevel = (ctx: CanvasRenderingContext2D) => {
+    // Digital Matrix environment with falling code
+    ctx.fillStyle = '#001100';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Animated digital rain columns
+    ctx.fillStyle = '#00ff41';
+    ctx.globalAlpha = 0.3;
+    for (let x = 0; x < canvas.width; x += 20) {
+      const offset = (Date.now() / 100 + x) % canvas.height;
+      for (let y = -50; y < canvas.height + 50; y += 30) {
+        const charY = (y + offset) % (canvas.height + 100);
+        if (charY > 0 && charY < canvas.height) {
+          ctx.font = '12px monospace';
+          ctx.fillText(Math.random() > 0.5 ? '1' : '0', x, charY);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // Neo's awakening pod area (left side)
+    ctx.fillStyle = '#002200';
+    ctx.fillRect(0, 0, 180, canvas.height);
+    
+    // Pod interface panels
+    ctx.fillStyle = '#00ff41';
+    ctx.fillRect(20, 50, 140, 100);
+    ctx.fillStyle = '#001100';
+    ctx.fillRect(25, 55, 130, 90);
+    
+    // Digital readouts
+    ctx.fillStyle = '#00ff41';
+    ctx.font = '10px monospace';
+    ctx.fillText('NEURAL LINK: ACTIVE', 30, 75);
+    ctx.fillText('REALITY: SIMULATED', 30, 90);
+    ctx.fillText('THREAT LEVEL: LOW', 30, 105);
+    ctx.fillText('DEFENSE: INITIALIZING', 30, 120);
+
+    // Data streams flowing right
+    ctx.strokeStyle = '#00ff41';
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.6;
+    for (let i = 0; i < 5; i++) {
+      const y = 200 + i * 80;
+      const flow = (Date.now() / 50) % 200;
+      ctx.beginPath();
+      ctx.moveTo(180, y);
+      ctx.lineTo(180 + flow, y);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Border
+    ctx.strokeStyle = '#00ff41';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(180, 0);
+    ctx.lineTo(180, canvas.height);
+    ctx.stroke();
+  };
+
+  const drawZionDefenseLevel = (ctx: CanvasRenderingContext2D) => {
+    // Underground bunker with tech panels
+    ctx.fillStyle = '#000033';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Rock/concrete texture background
+    ctx.fillStyle = '#111122';
+    for (let x = 0; x < canvas.width; x += 60) {
+      for (let y = 0; y < canvas.height; y += 60) {
+        if (Math.random() > 0.7) {
+          ctx.fillRect(x + Math.random() * 20, y + Math.random() * 20, 40, 40);
+        }
+      }
+    }
+
+    // Zion command center (left side)
+    ctx.fillStyle = '#001133';
+    ctx.fillRect(0, 0, 180, canvas.height);
+    
+    // Command center screens
+    for (let i = 0; i < 4; i++) {
+      const y = 50 + i * 120;
+      // Screen frame
+      ctx.fillStyle = '#4488ff';
+      ctx.fillRect(15, y, 150, 80);
+      // Screen content
+      ctx.fillStyle = '#000066';
+      ctx.fillRect(20, y + 5, 140, 70);
+      
+      // Screen data
+      ctx.fillStyle = '#4488ff';
+      ctx.font = '8px monospace';
+      ctx.fillText('ZION DEFENSE GRID', 25, y + 20);
+      ctx.fillText('SECTOR STATUS: ACTIVE', 25, y + 35);
+      ctx.fillText('SENTINELS: DEPLOYED', 25, y + 50);
+      ctx.fillText(`THREAT LEVEL: ${i + 1}`, 25, y + 65);
+    }
+
+    // Power conduits
+    ctx.strokeStyle = '#4488ff';
+    ctx.lineWidth = 4;
+    ctx.globalAlpha = 0.8;
+    for (let i = 0; i < 3; i++) {
+      const x = 180 + i * 200;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+      ctx.stroke();
+      
+      // Energy pulses
+      const pulse = (Date.now() / 100 + i * 50) % canvas.height;
+      ctx.fillStyle = '#88ccff';
+      ctx.fillRect(x - 2, pulse, 4, 20);
+    }
+    ctx.globalAlpha = 1;
+
+    // Border
+    ctx.strokeStyle = '#4488ff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(180, 0);
+    ctx.lineTo(180, canvas.height);
+    ctx.stroke();
+  };
+
+  const drawNebuchadnezzarLevel = (ctx: CanvasRenderingContext2D) => {
+    // Ship interior with metal plating
+    ctx.fillStyle = '#220000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Metal hull plating pattern
+    ctx.strokeStyle = '#440000';
+    ctx.lineWidth = 2;
+    for (let x = 0; x < canvas.width; x += 80) {
+      for (let y = 0; y < canvas.height; y += 80) {
+        ctx.strokeRect(x, y, 80, 80);
+        // Rivets
+        ctx.fillStyle = '#660000';
+        ctx.fillRect(x + 5, y + 5, 4, 4);
+        ctx.fillRect(x + 71, y + 5, 4, 4);
+        ctx.fillRect(x + 5, y + 71, 4, 4);
+        ctx.fillRect(x + 71, y + 71, 4, 4);
+      }
+    }
+
+    // Ship control room (left side)
+    ctx.fillStyle = '#330000';
+    ctx.fillRect(0, 0, 180, canvas.height);
+    
+    // Ship control panels
+    ctx.fillStyle = '#ff4444';
+    ctx.fillRect(10, 40, 160, 120);
+    ctx.fillStyle = '#110000';
+    ctx.fillRect(15, 45, 150, 110);
+    
+    // Control interfaces
+    ctx.fillStyle = '#ff4444';
+    ctx.font = '10px monospace';
+    ctx.fillText('NEBUCHADNEZZAR', 20, 65);
+    ctx.fillText('HULL INTEGRITY: 87%', 20, 80);
+    ctx.fillText('ENGINES: ONLINE', 20, 95);
+    ctx.fillText('WEAPONS: ARMED', 20, 110);
+    ctx.fillText('CREW STATUS: ALERT', 20, 125);
+    ctx.fillText('EMP: READY', 20, 140);
+
+    // Ship corridors/passages
+    ctx.fillStyle = '#440000';
+    for (let i = 0; i < 3; i++) {
+      const y = 200 + i * 100;
+      ctx.fillRect(180, y, canvas.width - 180, 30);
+      // Corridor lighting
+      ctx.fillStyle = '#ff6666';
+      for (let x = 200; x < canvas.width; x += 100) {
+        ctx.fillRect(x, y + 10, 60, 10);
+      }
+      ctx.fillStyle = '#440000';
+    }
+
+    // Emergency lighting strips
+    ctx.fillStyle = '#ff0000';
+    ctx.globalAlpha = 0.6 + 0.4 * Math.sin(Date.now() / 200);
+    ctx.fillRect(180, 0, 5, canvas.height);
+    ctx.fillRect(180, canvas.height - 5, canvas.width - 180, 5);
+    ctx.globalAlpha = 1;
+
+    // Border
+    ctx.strokeStyle = '#ff4444';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(180, 0);
+    ctx.lineTo(180, canvas.height);
+    ctx.stroke();
+  };
+
+  const drawMachineCityLevel = (ctx: CanvasRenderingContext2D) => {
+    // Industrial machine city
+    ctx.fillStyle = '#221100';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Industrial pipes and machinery
+    ctx.strokeStyle = '#664400';
+    ctx.lineWidth = 8;
+    for (let i = 0; i < 6; i++) {
+      const y = 50 + i * 80;
+      ctx.beginPath();
+      ctx.moveTo(200, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+      
+      // Pipe joints
+      ctx.fillStyle = '#885500';
+      for (let x = 250; x < canvas.width; x += 150) {
+        ctx.fillRect(x - 10, y - 15, 20, 30);
+      }
+    }
+
+    // Machine towers in background
+    ctx.fillStyle = '#443300';
+    for (let i = 0; i < 8; i++) {
+      const x = 300 + i * 80;
+      const height = 200 + Math.random() * 200;
+      ctx.fillRect(x, canvas.height - height, 40, height);
+      
+      // Tower lights
+      ctx.fillStyle = '#ffaa00';
+      for (let j = 0; j < 5; j++) {
+        const lightY = canvas.height - height + j * 40;
+        if (Math.random() > 0.5) {
+          ctx.fillRect(x + 15, lightY, 10, 5);
+        }
+      }
+      ctx.fillStyle = '#443300';
+    }
+
+    // Machine control center (left side)
+    ctx.fillStyle = '#332200';
+    ctx.fillRect(0, 0, 180, canvas.height);
+    
+    // Machine interfaces
+    for (let i = 0; i < 5; i++) {
+      const y = 30 + i * 100;
+      ctx.fillStyle = '#ffaa44';
+      ctx.fillRect(20, y, 140, 70);
+      ctx.fillStyle = '#221100';
+      ctx.fillRect(25, y + 5, 130, 60);
+      
+      // Machine readouts
+      ctx.fillStyle = '#ffaa44';
+      ctx.font = '9px monospace';
+      ctx.fillText('MACHINE CORE STATUS', 30, y + 20);
+      ctx.fillText(`SECTOR ${i + 1}: OPERATIONAL`, 30, y + 35);
+      ctx.fillText('POWER: 98.7%', 30, y + 50);
+    }
+
+    // Steam/exhaust vents
+    ctx.fillStyle = '#666666';
+    ctx.globalAlpha = 0.3;
+    for (let i = 0; i < 10; i++) {
+      const x = 200 + Math.random() * (canvas.width - 200);
+      const y = Math.random() * canvas.height;
+      const steam = (Date.now() / 100 + i * 20) % 100;
+      ctx.fillRect(x, y - steam, 5, steam);
+    }
+    ctx.globalAlpha = 1;
+
+    // Border
+    ctx.strokeStyle = '#ffaa44';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(180, 0);
+    ctx.lineTo(180, canvas.height);
+    ctx.stroke();
+  };
+
+  const drawSmithVirusLevel = (ctx: CanvasRenderingContext2D) => {
+    // Corrupted Matrix reality
+    ctx.fillStyle = '#110011';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Glitched reality blocks
+    for (let i = 0; i < 50; i++) {
+      const x = Math.random() * canvas.width;
+      const y = Math.random() * canvas.height;
+      const size = 20 + Math.random() * 40;
+      const glitch = Math.sin(Date.now() / 100 + i) > 0.5;
+      
+      if (glitch) {
+        ctx.fillStyle = Math.random() > 0.5 ? '#ff00ff' : '#00ff00';
+        ctx.fillRect(x, y, size, size);
+      }
+    }
+
+    // Corrupted code streams
+    ctx.font = '14px monospace';
+    for (let x = 0; x < canvas.width; x += 25) {
+      const corruption = Math.sin(Date.now() / 200 + x) * 0.5 + 0.5;
+      ctx.fillStyle = corruption > 0.5 ? '#ff00ff' : '#00ff00';
+      ctx.globalAlpha = 0.4;
+      
+      for (let y = 0; y < canvas.height; y += 20) {
+        const char = Math.random() > 0.5 ? 'S' : (Math.random() > 0.5 ? '1' : '0');
+        ctx.fillText(char, x, y + (Date.now() / 50) % 400);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // Smith virus core (left side)
+    ctx.fillStyle = '#220022';
+    ctx.fillRect(0, 0, 180, canvas.height);
+    
+    // Virus infection displays
+    for (let i = 0; i < 4; i++) {
+      const y = 50 + i * 120;
+      const infected = Math.sin(Date.now() / 300 + i) > 0;
+      
+      ctx.fillStyle = infected ? '#ff00ff' : '#00ff00';
+      ctx.fillRect(15, y, 150, 80);
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(20, y + 5, 140, 70);
+      
+      ctx.fillStyle = infected ? '#ff00ff' : '#00ff00';
+      ctx.font = '10px monospace';
+      ctx.fillText(infected ? 'SMITH VIRUS ACTIVE' : 'SYSTEM CLEAN', 25, y + 25);
+      ctx.fillText(`INFECTION: ${infected ? '99.9%' : '0.0%'}`, 25, y + 40);
+      ctx.fillText(infected ? 'REPLICATING...' : 'MONITORING...', 25, y + 55);
+    }
+
+    // Reality distortion waves
+    ctx.strokeStyle = '#ff00ff';
+    ctx.lineWidth = 3;
+    ctx.globalAlpha = 0.6;
+    for (let i = 0; i < 5; i++) {
+      const wave = (Date.now() / 100 + i * 50) % (canvas.width + 200);
+      ctx.beginPath();
+      ctx.arc(wave - 100, canvas.height / 2, 100 + i * 20, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Glitch border effect
+    const glitchOffset = Math.sin(Date.now() / 50) * 5;
+    ctx.strokeStyle = '#ff00ff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(180 + glitchOffset, 0);
+    ctx.lineTo(180 - glitchOffset, canvas.height);
+    ctx.stroke();
+  };
+
+  const triggerQuiz = useCallback((category?: string) => {
+    const question = getRandomQuestion(category as any);
+    setCurrentQuiz(question);
+    setShowQuiz(true);
+    onGameStateChange('quiz');
+  }, [onGameStateChange]);
+
+  // Game paths for enemies
+  const gamePaths = [
+    [
+      { x: -50, y: 200 },
+      { x: 150, y: 200 },
+      { x: 300, y: 150 },
+      { x: 450, y: 200 },
+      { x: 600, y: 250 },
+      { x: 750, y: 300 },
+      { x: 850, y: 300 }
+    ],
+    [
+      { x: -50, y: 400 },
+      { x: 200, y: 400 },
+      { x: 350, y: 350 },
+      { x: 500, y: 400 },
+      { x: 650, y: 450 },
+      { x: 850, y: 450 }
+    ]
+  ];
+
+  // Security tips for different strategic moves
+  const securityTips = {
+    firewallAtEntry: {
+      title: "You placed firewall defenses at enemy entry points - excellent proactive security!",
+      message: "Just like in cyber security, placing firewalls at network entry points (perimeter defense) is one of the most fundamental and effective security strategies. You're preventing threats before they can penetrate deeper into your infrastructure.",
+      principle: "Defense in Depth - Layer 1: Perimeter Security",
+      realWorldExample: "In real networks, firewalls at internet gateways filter malicious traffic before it reaches internal systems. Companies like banks place multiple firewall layers at their network perimeter to block attacks at the earliest possible point.",
+      icon: "🛡️"
+    },
+    layeredDefense: {
+      title: "You're building layered defenses with multiple tower types - this demonstrates defense in depth!",
+      message: "Using different types of security controls (Neo Defenders for balanced protection, Trinity Snipers for precision targeting, Morpheus Nodes for area coverage, Sentinel Barriers for rapid response) mirrors how real cyber security uses multiple complementary technologies like firewalls, antivirus, intrusion detection, and endpoint protection.",
+      principle: "Defense in Depth - Multiple Security Layers",
+      realWorldExample: "Enterprise security teams deploy firewalls, intrusion prevention systems, endpoint detection, email security, and user training as overlapping layers. If one layer fails, others continue protecting the organization.",
+      icon: "🏰"
+    },
+    chokepoint: {
+      title: "You're controlling Agent movement through strategic defense placement - this is network segmentation!",
+      message: "By forcing digital threats through specific paths with your defense node placement, you're demonstrating network segmentation principles. This limits where cyber attacks can go and gives you more control over monitoring and response.",
+      principle: "Network Segmentation and Access Control",
+      realWorldExample: "Companies segment their networks so that if attackers breach one area (like employee laptops), they can't easily move to critical systems like databases or financial applications. Each segment has its own security controls.",
+      icon: "🎯"
+    }
+  };
+  const towerTypes = {
+    archer: { damage: 35, range: 140, fireRate: 800, cost: 75, color: '#00ff41', name: 'Neo Defender', description: 'The One - Matrix code manipulation' },
+    mage: { damage: 50, range: 120, fireRate: 1200, cost: 125, color: '#0080ff', name: 'Morpheus Node', description: 'Wisdom and powerful reality bending' },
+    ballista: { damage: 100, range: 170, fireRate: 2000, cost: 200, color: '#ff8800', name: 'Trinity Sniper', description: 'Precise elimination protocols' },
+    firewall: { damage: 20, range: 100, fireRate: 400, cost: 150, color: '#ff0040', name: 'Sentinel Barrier', description: 'Automated defense protocols' }
+  };
+
+  const enemyTypes = {
+    grunt: { health: 30, speed: 0.8, points: 75, color: '#404040' },
+    warrior: { health: 60, speed: 0.7, points: 125, color: '#606060' },
+    berserker: { health: 45, speed: 1.2, points: 150, color: '#202020' },
+    uruk: { health: 120, speed: 0.5, points: 250, color: '#101010' },
+    troll: { health: 300, speed: 0.3, points: 500, color: '#000000' },
+    nazgul: { health: 200, speed: 1.0, points: 1000, color: '#000000' }
+  };
+
+  const spawnEnemy = useCallback((type: Enemy['type']) => {
+    const pathIndex = Math.floor(Math.random() * gamePaths.length);
+    const path = gamePaths[pathIndex];
+    const enemyConfig = enemyTypes[type];
+    
+    const enemy: Enemy = {
+      id: Math.random().toString(36).substr(2, 9),
+      x: path[0].x,
+      y: path[0].y,
+      health: enemyConfig.health,
+      maxHealth: enemyConfig.health,
+      speed: enemyConfig.speed,
+      type,
+      points: enemyConfig.points,
+      vulnerabilities: [],
+      abilities: [],
+      path,
+      pathIndex: 0
+    };
+
+    setEnemies(prev => [...prev, enemy]);
+  }, []);
+
+  // Get current level data and wave information
+  const currentLevelData = getCurrentLevel(currentLevel);
+  const currentWave = currentLevelData?.waves[currentWaveIndex];
+
+  // Spawn enemies based on current level's wave configuration
+  const spawnLevelEnemy = useCallback(() => {
+    if (gameMode !== 'campaign') {
+      // Fallback to original spawning for non-campaign modes
+      const enemyTypes = ['grunt', 'warrior', 'berserker'];
+      if (wave > 5) enemyTypes.push('uruk');
+      if (wave > 8) enemyTypes.push('troll');
+      if (wave > 12) enemyTypes.push('nazgul');
+      
+      const randomType = enemyTypes[Math.floor(Math.random() * enemyTypes.length)] as Enemy['type'];
+      spawnEnemy(randomType);
+      return;
+    }
+
+    if (!currentWave) return;
+
+    // Campaign mode: spawn based on current wave configuration OR keep spawning if quiz requirements not met
+    const currentTime = Date.now();
+    
+    // Check if we need to keep spawning enemies for quiz requirements
+    const needsMoreQuizzes = correctAnswersInLevel < 5;
+    const totalEnemiesInWave = currentWave.enemies.reduce((sum, group) => sum + group.count, 0);
+    
+    // If we've spawned all enemies for this wave but still need quizzes, keep spawning
+    if (waveEnemiesSpawned >= totalEnemiesInWave && needsMoreQuizzes) {
+      // Continue spawning enemies from the last enemy group until quiz requirements are met
+      if (currentTime - lastSpawnTime >= 2000) { // Spawn every 2 seconds
+        const lastEnemyGroup = currentWave.enemies[currentWave.enemies.length - 1];
+        spawnEnemy(lastEnemyGroup.type);
+        setLastSpawnTime(currentTime);
+      }
+      return;
+    } else if (waveEnemiesSpawned >= totalEnemiesInWave && !needsMoreQuizzes) {
+      // Wave is complete and quiz requirements are met
+      return;
+    }
+    
+    // Find which enemy group should be spawning now
+    let spawnedSoFar = 0;
+    
+    for (const enemyGroup of currentWave.enemies) {
+      const groupStartIndex = spawnedSoFar;
+      const groupEndIndex = spawnedSoFar + enemyGroup.count;
+      
+      // If we're in the range for this group and haven't spawned all of them
+      if (waveEnemiesSpawned >= groupStartIndex && waveEnemiesSpawned < groupEndIndex) {
+        if (currentTime - lastSpawnTime >= enemyGroup.spawnDelay) {
+          spawnEnemy(enemyGroup.type);
+          setWaveEnemiesSpawned(prev => prev + 1);
+          setLastSpawnTime(currentTime);
+          return;
+        }
+        return; // Still waiting for spawn delay
+      }
+      
+      spawnedSoFar += enemyGroup.count;
+    }
+  }, [currentWave, gameMode, wave, waveEnemiesSpawned, lastSpawnTime, spawnEnemy, currentWaveIndex]);
+
+  // Check if current wave is complete and advance to next wave
+  const checkWaveCompletion = useCallback(() => {
+    if (!currentWave || gameMode !== 'campaign') return;
+
+    const totalEnemiesInWave = currentWave.enemies.reduce((sum, group) => sum + group.count, 0);
+    const quizRequirementsMet = correctAnswersInLevel >= 5;
+    
+    // Wave is complete when all enemies are spawned and defeated AND quiz requirements are met
+    if (waveEnemiesSpawned >= totalEnemiesInWave && enemies.length === 0 && waveTimer > 60 && quizRequirementsMet) {
+      // Move to next wave
+      if (currentWaveIndex < (currentLevelData?.waves.length || 0) - 1) {
+        setCurrentWaveIndex(prev => prev + 1);
+        setWaveEnemiesSpawned(0);
+        setWave(prev => prev + 1);
+        setWaveTimer(0);
+        setLastSpawnTime(0);
+        console.log(`Advancing to wave ${currentWaveIndex + 2}`);
+      } else {
+        // Level complete - could trigger level completion logic here
+        console.log(`Level ${currentLevel} Complete!`);
+      }
+    }
+  }, [currentWave, gameMode, waveEnemiesSpawned, enemies.length, currentWaveIndex, currentLevelData, waveTimer, currentLevel, correctAnswersInLevel]);
+
+  // Trigger quiz based on current wave's quiz triggers
+  const checkQuizTriggers = useCallback(() => {
+    if (!currentWave || gameMode !== 'campaign') return;
+    
+    // Don't trigger more quizzes if we've already met the requirement
+    if (correctAnswersInLevel >= 5) return;
+
+    for (const trigger of currentWave.quizTriggers) {
+      const triggerKey = `L${currentLevel}-W${currentWaveIndex}-E${trigger.enemyCount}-${trigger.category}`;
+      
+      // Calculate total enemies defeated (not just spawned)
+      const totalEnemiesDefeated = Math.floor(score / 100); // Rough estimate based on score
+      
+      if (totalEnemiesDefeated >= trigger.enemyCount && !triggeredQuizzes.has(triggerKey)) {
+        // Trigger quiz for this category
+        setTriggeredQuizzes(prev => new Set(prev).add(triggerKey));
+        console.log(`Triggering quiz: ${trigger.category} after ${totalEnemiesDefeated} enemies defeated`);
+        setTimeout(() => triggerQuiz(trigger.category), 1000);
+        break; // Only trigger one quiz at a time
+      }
+    }
+    
+    // Also add a fallback: trigger random quizzes every 5 enemies defeated if no specific triggers fired
+    const totalEnemiesDefeated = Math.floor(score / 100);
+    if (totalEnemiesDefeated > 0 && totalEnemiesDefeated % 5 === 0) {
+      const fallbackKey = `L${currentLevel}-fallback-${totalEnemiesDefeated}`;
+      if (!triggeredQuizzes.has(fallbackKey)) {
+        setTriggeredQuizzes(prev => new Set(prev).add(fallbackKey));
+        const categories = ['passwords', 'phishing', 'malware', 'network', 'social', 'encryption'];
+        const randomCategory = categories[Math.floor(Math.random() * categories.length)];
+        console.log(`Triggering fallback quiz: ${randomCategory} after ${totalEnemiesDefeated} enemies defeated`);
+        setTimeout(() => triggerQuiz(randomCategory), 1000);
+      }
+    }
+  }, [currentWave, gameMode, triggerQuiz, currentWaveIndex, triggeredQuizzes, currentLevel, score, correctAnswersInLevel]);
+
+  const placeTower = useCallback((x: number, y: number) => {
+    const towerConfig = towerTypes[selectedTowerType];
+    if (gold >= towerConfig.cost) {
+      // Check for strategic security moves
+      const isNearEntry = x < 200; // Near enemy spawn points
+      const isFirewall = selectedTowerType === 'firewall';
+      
+      const tower: Tower = {
+        id: Math.random().toString(36).substr(2, 9),
+        x,
+        y,
+        type: selectedTowerType,
+        level: 1,
+        damage: towerConfig.damage,
+        range: towerConfig.range,
+        fireRate: towerConfig.fireRate,
+        lastFired: 0,
+        cost: towerConfig.cost,
+        upgradeCost: towerConfig.cost * 1.5
+      };
+      
+      setTowers(prev => [...prev, tower]);
+      setGold(prev => prev - towerConfig.cost);
+      
+      // Detect strategic security moves and show educational tips
+      setTimeout(() => {
+        if (isFirewall && isNearEntry && !hasShownFirewallTip) {
+          setCurrentSecurityTip(securityTips.firewallAtEntry);
+          setShowSecurityTip(true);
+          setHasShownFirewallTip(true);
+          onGameStateChange('quiz'); // Pause the game
+          setScore(prev => {
+            const newScore = prev + 200;
+            onScoreUpdate(newScore);
+            return newScore;
+          });
+        } else if (towers.length >= 3 && !hasShownLayeredDefenseTip) {
+          // Check if player has multiple tower types
+          const towerTypes = new Set([...towers.map(t => t.type), selectedTowerType]);
+          if (towerTypes.size >= 3) {
+            setCurrentSecurityTip(securityTips.layeredDefense);
+            setShowSecurityTip(true);
+            setHasShownLayeredDefenseTip(true);
+            onGameStateChange('quiz'); // Pause the game
+            setScore(prev => {
+              const newScore = prev + 200;
+              onScoreUpdate(newScore);
+              return newScore;
+            });
+          }
+        } else if (towers.length >= 5 && !hasShownChokepointTip && Math.random() < 0.3) {
+          setCurrentSecurityTip(securityTips.chokepoint);
+          setShowSecurityTip(true);
+          setHasShownChokepointTip(true);
+          onGameStateChange('quiz'); // Pause the game
+          setScore(prev => {
+            const newScore = prev + 200;
+            onScoreUpdate(newScore);
+            return newScore;
+          });
+        }
+      }, 500);
+    }
+  }, [selectedTowerType, gold]);
+
+  const handleCanvasClick = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    
+    placeTower(x, y);
+  }, [placeTower]);
+
+  const handleQuizAnswer = useCallback((correct: boolean, points: number) => {
+    if (correct) {
+      onQuizCorrect();
+      setScore(prev => {
+        const newScore = prev + points;
+        onScoreUpdate(newScore);
+        return newScore;
+      });
+      setGold(prev => prev + points / 2);
+    }
+    setShowQuiz(false);
+    setCurrentQuiz(null);
+    onGameStateChange('playing');
+  }, [onScoreUpdate, onGameStateChange, onQuizCorrect]);
+
+  const handleSecurityTipClose = useCallback(() => {
+    setShowSecurityTip(false);
+    setCurrentSecurityTip(null);
+    onGameStateChange('playing');
+  }, [onGameStateChange]);
+  const updateGame = useCallback(() => {
+    if (gameState !== 'playing') return;
+
+    const currentTime = Date.now();
+
+    // Update enemies
+    setEnemies(prev => {
+      const updatedEnemies = prev.map(enemy => {
+        if (enemy.pathIndex < enemy.path.length - 1) {
+          const currentTarget = enemy.path[enemy.pathIndex + 1];
+          const dx = currentTarget.x - enemy.x;
+          const dy = currentTarget.y - enemy.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          
+          if (distance < 5) {
+            enemy.pathIndex++;
+          } else {
+            enemy.x += (dx / distance) * enemy.speed;
+            enemy.y += (dy / distance) * enemy.speed;
+          }
+        }
+        return enemy;
+      });
+
+      // Remove enemies that reached the end
+      const remainingEnemies = updatedEnemies.filter(enemy => {
+        if (enemy.pathIndex >= enemy.path.length - 1 && 
+            Math.abs(enemy.x - enemy.path[enemy.path.length - 1].x) < 10) {
+          setLives(prev => {
+            const newLives = prev - 1;
+            onLivesUpdate(newLives);
+            return newLives;
+          });
+          return false;
+        }
+        return true;
+      });
+
+      return remainingEnemies;
+    });
+
+    // Tower shooting logic
+    setTowers(prev => {
+      return prev.map(tower => {
+        if (currentTime - tower.lastFired > tower.fireRate) {
+          // Find nearest enemy in range
+          const nearestEnemy = enemies.find(enemy => {
+            const dx = enemy.x - tower.x;
+            const dy = enemy.y - tower.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            return distance <= tower.range;
+          });
+
+          if (nearestEnemy) {
+            // Create projectile
+            const projectile: Projectile = {
+              id: Math.random().toString(36).substr(2, 9),
+              x: tower.x,
+              y: tower.y,
+              targetX: nearestEnemy.x,
+              targetY: nearestEnemy.y,
+              speed: 5,
+              damage: tower.damage,
+              type: tower.type === 'mage' ? 'fireball' : 'arrow'
+            };
+
+            setProjectiles(prev => [...prev, projectile]);
+            tower.lastFired = currentTime;
+          }
+        }
+        return tower;
+      });
+    });
+
+    // Update projectiles
+    setProjectiles(prev => {
+      return prev.filter(projectile => {
+        const dx = projectile.targetX - projectile.x;
+        const dy = projectile.targetY - projectile.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance < 10) {
+          // Hit target - damage enemy
+          setEnemies(prevEnemies => {
+            return prevEnemies.map(enemy => {
+              const enemyDx = enemy.x - projectile.targetX;
+              const enemyDy = enemy.y - projectile.targetY;
+              const enemyDistance = Math.sqrt(enemyDx * enemyDx + enemyDy * enemyDy);
+              
+              if (enemyDistance < 30) {
+                enemy.health -= projectile.damage;
+                if (enemy.health <= 0) {
+                  setScore(prevScore => {
+                    const newScore = prevScore + enemy.points;
+                    onScoreUpdate(newScore);
+                    return newScore;
+                  });
+                  setGold(prevGold => prevGold + enemy.points / 4);
+                  
+                  // Random chance for quiz
+                  if (Math.random() < 0.03) { // Further reduced quiz frequency to prevent spam
+                    setTimeout(() => triggerQuiz(), 500);
+                  }
+                }
+              }
+              return enemy;
+            }).filter(enemy => enemy.health > 0);
+          });
+          return false;
+        }
+        
+        projectile.x += (dx / distance) * projectile.speed;
+        projectile.y += (dy / distance) * projectile.speed;
+        return true;
+      });
+    });
+
+    // Spawn enemies periodically
+    if (gameMode === 'campaign') {
+      // Campaign mode: use level-specific spawning
+      spawnLevelEnemy();
+      checkWaveCompletion();
+      checkQuizTriggers();
+    } else {
+      // Survival/Training modes: use original random spawning
+      const spawnChance = Math.max(0.008, 0.008 + (wave - 1) * 0.003);
+      if (Math.random() < spawnChance) {
+        const enemyTypes = ['grunt', 'warrior', 'berserker'];
+        if (wave > 5) enemyTypes.push('uruk');
+        if (wave > 8) enemyTypes.push('troll');
+        if (wave > 12) enemyTypes.push('nazgul');
+        
+        const randomType = enemyTypes[Math.floor(Math.random() * enemyTypes.length)] as Enemy['type'];
+        spawnEnemy(randomType);
+      }
+    }
+
+    // Update wave timer
+    setWaveTimer(prev => prev + 1);
+    
+    // Check for quiz triggers every few frames
+    if (waveTimer % 30 === 0) { // Check every 30 frames (~0.5 seconds)
+      checkQuizTriggers();
+    }
+  }, [gameState, enemies, wave, gameMode, spawnLevelEnemy, checkWaveCompletion, checkQuizTriggers, spawnEnemy, triggerQuiz, onScoreUpdate, onLivesUpdate]);
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Clear canvas completely
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw level-specific background
+    drawLevelBackground(ctx, canvas, currentLevel);
+
+    // Draw level-specific base/fortress
+    drawLevelBase(ctx, canvas, currentLevel, enemies.length);
+
+    // Draw digital data paths
+    gamePaths.forEach((path, index) => {
+      // Main data stream
+      ctx.strokeStyle = index === 0 ? '#ff0040' : '#ff4080';
+      ctx.lineWidth = 8;
+      ctx.shadowColor = index === 0 ? '#ff0040' : '#ff4080';
+      ctx.shadowBlur = 15;
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      path.forEach(point => ctx.lineTo(point.x, point.y));
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      
+      // Data packet indicators
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([10, 10]);
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      path.forEach(point => ctx.lineTo(point.x, point.y));
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+
+    // Draw cyber defense towers
+    towers.forEach(tower => {
+      const config = towerTypes[tower.type];
+      
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = 'transparent';
+      
+      if (tower.type === 'archer') {
+        // Neo - The One
+        ctx.fillStyle = '#00ff41';
+        ctx.shadowColor = '#00ff41';
+        ctx.shadowBlur = 10;
+        
+        // Neo's body (long coat)
+        ctx.fillRect(tower.x - 8, tower.y - 15, 16, 30);
+        ctx.shadowBlur = 0;
+        
+        // Neo's head
+        ctx.fillStyle = '#003311';
+        ctx.fillRect(tower.x - 6, tower.y - 18, 12, 8);
+        
+        // Sunglasses
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(tower.x - 5, tower.y - 16, 10, 3);
+        
+        // Matrix code aura
+        ctx.strokeStyle = '#00ff41';
+        ctx.lineWidth = 2;
+        ctx.font = '8px monospace';
+        ctx.fillStyle = 'rgba(0, 255, 65, 0.7)';
+        ctx.fillText('1', tower.x - 20, tower.y - 10);
+        ctx.fillText('0', tower.x + 15, tower.y + 5);
+        ctx.fillText('1', tower.x - 15, tower.y + 20);
+        
+        // Power field
+        ctx.beginPath();
+        ctx.arc(tower.x, tower.y, 15, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (tower.type === 'mage') {
+        // Morpheus - The Mentor
+        ctx.fillStyle = '#0080ff';
+        ctx.shadowColor = '#0080ff';
+        ctx.shadowBlur = 15;
+        
+        // Morpheus body
+        ctx.fillRect(tower.x - 10, tower.y - 15, 20, 30);
+        ctx.shadowBlur = 0;
+        
+        // Morpheus head
+        ctx.fillStyle = '#004080';
+        ctx.fillRect(tower.x - 8, tower.y - 18, 16, 10);
+        
+        // Morpheus glasses
+        ctx.fillStyle = '#000080';
+        ctx.fillRect(tower.x - 7, tower.y - 16, 14, 4);
+        
+        // Wisdom aura
+        ctx.strokeStyle = '#0080ff';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(tower.x, tower.y, 18, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (tower.type === 'ballista') {
+        // Trinity - The Operator
+        ctx.fillStyle = '#ffaa00';
+        ctx.shadowColor = '#ffaa00';
+        ctx.shadowBlur = 10;
+        
+        // Trinity body (leather outfit)
+        ctx.fillRect(tower.x - 8, tower.y - 15, 16, 30);
+        ctx.shadowBlur = 0;
+        
+        // Trinity head
+        ctx.fillStyle = '#804400';
+        ctx.fillRect(tower.x - 6, tower.y - 18, 12, 8);
+        
+        // Hair
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(tower.x - 7, tower.y - 20, 14, 6);
+        
+        // Sniper targeting
+        ctx.strokeStyle = '#ffaa00';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(tower.x, tower.y, 20, 0, Math.PI * 2);
+        ctx.moveTo(tower.x - 15, tower.y);
+        ctx.lineTo(tower.x + 15, tower.y);
+        ctx.moveTo(tower.x, tower.y - 15);
+        ctx.lineTo(tower.x, tower.y + 15);
+        ctx.stroke();
+      } else if (tower.type === 'firewall') {
+        // Sentinel Defense System
+        ctx.fillStyle = '#ff0040';
+        ctx.shadowColor = '#ff0040';
+        ctx.shadowBlur = 15;
+        
+        // Sentinel body (mechanical)
+        ctx.fillRect(tower.x - 10, tower.y - 10, 20, 20);
+        ctx.shadowBlur = 0;
+        
+        // Sentinel tentacles
+        ctx.strokeStyle = '#ff0040';
+        ctx.lineWidth = 3;
+        for (let i = 0; i < 6; i++) {
+          const angle = (i * Math.PI) / 3;
+          const length = 12 + Math.sin(Date.now() * 0.01 + i) * 3;
+          ctx.beginPath();
+          ctx.moveTo(tower.x, tower.y);
+          ctx.lineTo(
+            tower.x + Math.cos(angle) * length,
+            tower.y + Math.sin(angle) * length
+          );
+          ctx.stroke();
+        }
+        
+        // Sentinel eye
+        ctx.fillStyle = '#ff4080';
+        ctx.beginPath();
+        ctx.arc(tower.x, tower.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Defense field
+        ctx.strokeStyle = '#ff0040';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.arc(tower.x, tower.y, 20, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      
+      // Draw range circle when selected
+      if (selectedTowerType === tower.type) {
+        ctx.strokeStyle = config.color + '60';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.arc(tower.x, tower.y, tower.range, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    });
+    ctx.beginPath();
+    ctx.moveTo(0, canvas.height * 0.5);
+    ctx.lineTo(200, canvas.height * 0.3);
+    ctx.lineTo(400, canvas.height * 0.4);
+    ctx.lineTo(600, canvas.height * 0.2);
+    ctx.lineTo(800, canvas.height * 0.35);
+    ctx.lineTo(800, canvas.height * 0.7);
+    ctx.lineTo(0, canvas.height * 0.7);
+    ctx.closePath();
+    ctx.fill();
+
+    // Draw Gondor fortress with better design
+    ctx.fillStyle = '#6b7280';
+    ctx.fillRect(0, 0, 120, canvas.height);
+    
+    // Add fortress wall texture
+    ctx.fillStyle = '#4b5563';
+    for (let i = 0; i < 8; i++) {
+      ctx.fillRect(10, 50 + i * 70, 100, 10);
+    }
+    
+    // Add fortress towers
+    ctx.fillStyle = '#6b7280';
+    ctx.fillRect(10, 50, 25, 150);
+    ctx.fillRect(85, 50, 25, 150);
+    
+    // Tower tops
+    ctx.fillStyle = '#4b5563';
+    ctx.fillRect(5, 40, 35, 20);
+    ctx.fillRect(80, 40, 35, 20);
+    
+    // Gondor banner - simplified and cleaner
+    ctx.fillStyle = '#f1f5f9';
+    ctx.fillRect(35, 80, 50, 70);
+    
+    // White Tree of Gondor (simplified)
+    ctx.fillStyle = '#1e40af';
+    ctx.fillRect(45, 90, 30, 50);
+    
+    // Tree trunk
+    ctx.fillStyle = '#8b4513';
+    ctx.fillRect(58, 120, 4, 15);
+    
+    // Tree branches
+    ctx.strokeStyle = '#8b4513';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(60, 120);
+    ctx.lineTo(55, 110);
+    ctx.moveTo(60, 120);
+    ctx.lineTo(65, 110);
+    ctx.moveTo(60, 115);
+    ctx.lineTo(52, 105);
+    ctx.moveTo(60, 115);
+    ctx.lineTo(68, 105);
+    ctx.stroke();
+
+    // Draw paths
+    gamePaths.forEach(path => {
+      ctx.strokeStyle = '#8b7355';
+      ctx.lineWidth = 25;
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      path.forEach(point => ctx.lineTo(point.x, point.y));
+      ctx.stroke();
+      
+      // Add path borders
+      ctx.strokeStyle = '#654321';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y - 12);
+      path.forEach(point => ctx.lineTo(point.x, point.y - 12));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y + 12);
+      path.forEach(point => ctx.lineTo(point.x, point.y + 12));
+      ctx.stroke();
+    });
+
+    // Draw towers with LOTR styling
+    towers.forEach(tower => {
+      const config = towerTypes[tower.type];
+      
+      // Reset any shadow effects
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = 'transparent';
+      
+      if (tower.type === 'archer') {
+        // Draw archer tower as a stone watchtower
+        ctx.fillStyle = '#6b7280';
+        ctx.fillRect(tower.x - 12, tower.y - 12, 24, 24);
+        ctx.fillStyle = '#4b5563';
+        ctx.fillRect(tower.x - 10, tower.y - 10, 20, 20);
+        // Add crenellations
+        ctx.fillStyle = '#6b7280';
+        for (let i = 0; i < 3; i++) {
+          ctx.fillRect(tower.x - 12 + i * 8, tower.y - 16, 4, 4);
+        }
+        // Add archer figure
+        ctx.fillStyle = '#22c55e';
+        ctx.fillRect(tower.x - 3, tower.y - 6, 6, 8);
+        // Bow
+        ctx.strokeStyle = '#8b4513';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(tower.x + 8, tower.y, 6, 0, Math.PI);
+        ctx.stroke();
+      } else if (tower.type === 'mage') {
+        // Draw mage tower as a crystal spire
+        ctx.fillStyle = '#1e1b4b';
+        ctx.fillRect(tower.x - 10, tower.y - 10, 20, 20);
+        // Crystal on top
+        ctx.fillStyle = '#3b82f6';
+        ctx.beginPath();
+        ctx.moveTo(tower.x, tower.y - 15);
+        ctx.lineTo(tower.x - 6, tower.y - 5);
+        ctx.lineTo(tower.x + 6, tower.y - 5);
+        ctx.closePath();
+        ctx.fill();
+        // Magical glow
+        ctx.shadowColor = '#3b82f6';
+      } else if (tower.type === 'ballista') {
+        // Draw ballista as a siege weapon
+        ctx.fillStyle = '#8b4513';
+        ctx.fillRect(tower.x - 15, tower.y - 8, 30, 16);
+        // Ballista arms
+        ctx.strokeStyle = '#654321';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(tower.x - 10, tower.y - 8);
+        ctx.lineTo(tower.x - 15, tower.y - 15);
+        ctx.moveTo(tower.x + 10, tower.y - 8);
+        ctx.lineTo(tower.x + 15, tower.y - 15);
+        ctx.stroke();
+      } else if (tower.type === 'firewall') {
+        // Draw firewall as a magical barrier
+        ctx.fillStyle = '#dc2626';
+        ctx.fillRect(tower.x - 8, tower.y - 12, 16, 24);
+        // Flame effects
+        for (let i = 0; i < 5; i++) {
+          ctx.fillStyle = i % 2 === 0 ? '#f59e0b' : '#ef4444';
+          ctx.beginPath();
+          ctx.arc(tower.x - 6 + i * 3, tower.y - 15 + Math.sin(Date.now() * 0.01 + i) * 3, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      
+      // Draw range circle when selected
+      if (selectedTowerType === tower.type) {
+        ctx.strokeStyle = config.color + '60';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.arc(tower.x, tower.y, tower.range, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    });
+
+    // Draw enemies with LOTR orc styling
+    enemies.forEach(enemy => {
+      // Reset any effects
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = 'transparent';
+      
+      const config = enemyTypes[enemy.type];
+      
+      if (enemy.type === 'grunt') {
+        // Basic Malware
+        ctx.fillStyle = '#ff0040';
+        ctx.shadowColor = '#ff0040';
+        ctx.shadowBlur = 5;
+        ctx.fillRect(enemy.x - 8, enemy.y - 8, 16, 16);
+        ctx.shadowBlur = 0;
+        
+        // Digital core
+        ctx.fillStyle = '#800020';
+        ctx.fillRect(enemy.x - 4, enemy.y - 4, 8, 8);
+        
+        // Threat indicators
+        ctx.fillStyle = '#ff0040';
+        ctx.fillRect(enemy.x - 2, enemy.y - 6, 1, 2);
+        ctx.fillRect(enemy.x + 1, enemy.y - 6, 1, 2);
+      } else if (enemy.type === 'warrior') {
+        // Advanced Trojan
+        ctx.fillStyle = '#ff4000';
+        ctx.shadowColor = '#ff4000';
+        ctx.shadowBlur = 8;
+        ctx.fillRect(enemy.x - 10, enemy.y - 10, 20, 20);
+        ctx.shadowBlur = 0;
+        
+        // Encrypted shell
+        ctx.fillStyle = '#802000';
+        ctx.fillRect(enemy.x - 8, enemy.y - 8, 16, 4);
+        ctx.fillRect(enemy.x - 8, enemy.y, 16, 4);
+        
+        // Attack vector
+        ctx.fillStyle = '#ff4000';
+        ctx.fillRect(enemy.x + 8, enemy.y - 6, 4, 12);
+      } else if (enemy.type === 'berserker') {
+        // Ransomware
+        ctx.fillStyle = '#ff8000';
+        ctx.shadowColor = '#ff8000';
+        ctx.shadowBlur = 10;
+        ctx.fillRect(enemy.x - 9, enemy.y - 9, 18, 18);
+        ctx.shadowBlur = 0;
+        
+        // Encryption spikes
+        for (let i = 0; i < 6; i++) {
+          ctx.fillStyle = '#804000';
+          ctx.fillRect(enemy.x - 8 + i * 3, enemy.y - 12, 2, 4);
+        }
+        
+        // Payload extensions
+        ctx.fillStyle = '#ffaa00';
+        ctx.fillRect(enemy.x - 12, enemy.y - 2, 4, 2);
+        ctx.fillRect(enemy.x + 8, enemy.y - 2, 4, 2);
+      } else if (enemy.type === 'uruk') {
+        // Advanced Persistent Threat
+        ctx.fillStyle = '#8000ff';
+        ctx.shadowColor = '#8000ff';
+        ctx.shadowBlur = 12;
+        ctx.fillRect(enemy.x - 14, enemy.y - 14, 28, 28);
+        ctx.shadowBlur = 0;
+        
+        // Stealth layers
+        ctx.fillStyle = '#400080';
+        ctx.fillRect(enemy.x - 12, enemy.y - 12, 24, 8);
+        ctx.fillRect(enemy.x - 12, enemy.y, 24, 8);
+        
+        // Command & Control
+        ctx.fillStyle = '#8000ff';
+        ctx.fillRect(enemy.x + 12, enemy.y - 8, 6, 16);
+      } else if (enemy.type === 'troll') {
+        // Botnet Controller
+        ctx.fillStyle = '#404040';
+        ctx.shadowColor = '#808080';
+        ctx.shadowBlur = 15;
+        ctx.fillRect(enemy.x - 18, enemy.y - 18, 36, 36);
+        ctx.shadowBlur = 0;
+        
+        // Network nodes
+        ctx.fillStyle = '#606060';
+        for (let i = 0; i < 4; i++) {
+          ctx.fillRect(enemy.x - 15 + i * 8, enemy.y - 15, 6, 6);
+          ctx.fillRect(enemy.x - 15 + i * 8, enemy.y - 5, 6, 6);
+        }
+        
+        // Control signals
+        ctx.fillStyle = '#ff0000';
+        ctx.shadowColor = '#ff0000';
+        ctx.shadowBlur = 5;
+        ctx.fillRect(enemy.x - 8, enemy.y - 12, 4, 4);
+        ctx.fillRect(enemy.x + 4, enemy.y - 12, 4, 4);
+        ctx.shadowBlur = 0;
+      } else if (enemy.type === 'nazgul') {
+        // Zero-Day Exploit
+        ctx.fillStyle = '#000040';
+        ctx.shadowColor = '#0000ff';
+        ctx.shadowBlur = 20;
+        ctx.fillRect(enemy.x - 12, enemy.y - 12, 24, 24);
+        ctx.shadowBlur = 0;
+        
+        // Stealth field
+        ctx.fillStyle = '#000020';
+        ctx.beginPath();
+        ctx.arc(enemy.x, enemy.y, 15, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Exploit vectors
+        ctx.fillStyle = '#0080ff';
+        ctx.shadowColor = '#0080ff';
+        ctx.shadowBlur = 8;
+        ctx.fillRect(enemy.x - 4, enemy.y - 8, 2, 3);
+        ctx.fillRect(enemy.x + 2, enemy.y - 8, 2, 3);
+        ctx.shadowBlur = 0;
+        
+        // Vulnerability scan
+        ctx.strokeStyle = '#000040';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(enemy.x, enemy.y, 20, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      
+      // Health bar
+      const healthPercent = enemy.health / enemy.maxHealth;
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(enemy.x - 15, enemy.y - 22, 30, 5);
+      ctx.fillStyle = healthPercent > 0.5 ? '#00ff41' : healthPercent > 0.25 ? '#ffaa00' : '#ff0040';
+      ctx.fillRect(enemy.x - 15, enemy.y - 22, 30 * healthPercent, 5);
+      // Health bar border
+      ctx.strokeStyle = '#00ff41';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(enemy.x - 15, enemy.y - 22, 30, 5);
+    });
+
+    // Draw projectiles with LOTR styling
+    projectiles.forEach(projectile => {
+      // Reset effects
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = 'transparent';
+      
+      if (projectile.type === 'arrow') {
+        // Neo's Matrix Code Bullet
+        ctx.strokeStyle = '#00ff41';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = '#00ff41';
+        ctx.shadowBlur = 5;
+        
+        // Bullet trail
+        ctx.beginPath();
+        ctx.moveTo(projectile.x - 6, projectile.y);
+        ctx.lineTo(projectile.x + 6, projectile.y);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        
+        // Code fragments
+        ctx.fillStyle = '#00ff41';
+        ctx.font = '8px monospace';
+        ctx.fillText('1', projectile.x + 8, projectile.y - 2);
+        ctx.fillText('0', projectile.x + 8, projectile.y + 6);
+      } else if (projectile.type === 'fireball') {
+        // Morpheus Wisdom Blast
+        ctx.fillStyle = '#0080ff';
+        ctx.shadowColor = '#0080ff';
+        ctx.shadowBlur = 15;
+        
+        // Energy orb
+        ctx.beginPath();
+        ctx.arc(projectile.x, projectile.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        
+        // Wisdom core
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(projectile.x, projectile.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Knowledge particles
+        ctx.fillStyle = '#0080ff';
+        ctx.font = '6px monospace';
+        ctx.fillText('?', projectile.x - 10, projectile.y - 8);
+        ctx.fillText('!', projectile.x + 8, projectile.y + 8);
+      } else if (projectile.type === 'bolt') {
+        // Trinity Sniper Shot
+        ctx.strokeStyle = '#ffaa00';
+        ctx.lineWidth = 4;
+        ctx.shadowColor = '#ffaa00';
+        ctx.shadowBlur = 8;
+        
+        // Sniper trail
+        ctx.beginPath();
+        ctx.moveTo(projectile.x - 8, projectile.y);
+        ctx.lineTo(projectile.x + 8, projectile.y);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        
+        // Precision targeting
+        ctx.fillStyle = '#ffaa00';
+        ctx.beginPath();
+        ctx.arc(projectile.x + 6, projectile.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (projectile.type === 'virus') {
+        // Sentinel Laser
+        ctx.fillStyle = '#ff0040';
+        ctx.shadowColor = '#ff0040';
+        ctx.shadowBlur = 10;
+        
+        // Laser beam
+        ctx.strokeStyle = '#ff0040';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(projectile.x - 10, projectile.y);
+        ctx.lineTo(projectile.x + 10, projectile.y);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        
+        // Laser core
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(projectile.x, projectile.y, 1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+
+    // Draw UI
+    ctx.fillStyle = '#00ff41';
+    ctx.font = '14px monospace';
+    ctx.shadowColor = '#00ff41';
+    ctx.shadowBlur = 3;
+    ctx.fillText(`CREDITS: ${gold}`, 130, 30);
+    ctx.fillText(`SCORE: ${score}`, 130, 50);
+    ctx.fillText(`NODES: ${lives}`, 130, 70);
+    if (gameMode === 'campaign' && currentLevelData) {
+      ctx.fillText(`WAVE: ${currentWaveIndex + 1}/${currentLevelData.waves.length}`, 130, 90);
+      ctx.fillText(`LEVEL: ${currentLevel}`, 130, 110);
+    } else {
+      ctx.fillText(`WAVE: ${wave}`, 130, 90);
+    }
+    ctx.shadowBlur = 0;
+  }, [towers, enemies, projectiles, selectedTowerType, gold, score, lives, wave, gameMode, currentLevelData, currentWaveIndex, currentLevel]);
+
+  // Reset wave tracking when level changes
+  useEffect(() => {
+    setCurrentWaveIndex(0);
+    setWaveEnemiesSpawned(0);
+    setWaveTimer(0);
+    setWave(1);
+    setLastSpawnTime(0);
+    setTriggeredQuizzes(new Set()); // Reset triggered quizzes for new level
+  }, [currentLevel]);
+
+  useEffect(() => {
+    const gameLoop = () => {
+      updateGame();
+      draw();
+      gameLoopRef.current = requestAnimationFrame(gameLoop);
+    };
+
+    if (gameState === 'playing') {
+      gameLoopRef.current = requestAnimationFrame(gameLoop);
+    }
+
+    return () => {
+      if (gameLoopRef.current) {
+        cancelAnimationFrame(gameLoopRef.current);
+      }
+    };
+  }, [updateGame, draw, gameState]);
+
+  useEffect(() => {
+    if (lives <= 0) {
+      onGameStateChange('gameOver');
+    }
+  }, [lives, onGameStateChange]);
+  
+  return (
+    <div className="flex flex-col lg:flex-row min-h-screen bg-slate-900">
+      {/* Game Canvas */}
+      <div className="flex-1 flex items-center justify-center p-4">
+        <div className="relative">
+          <canvas
+            ref={canvasRef}
+            width={800}
+            height={600}
+            className="border-2 border-amber-500/30 rounded-lg bg-slate-800 cursor-crosshair"
+            onClick={handleCanvasClick}
+          />
+          
+          {gameState === 'paused' && (
+            <div className="absolute inset-0 bg-black/70 flex items-center justify-center rounded-lg">
+              <div className="text-white text-3xl font-bold">PAUSED</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Level Progress Tracker */}
+      {gameMode === 'campaign' && currentLevelData && (
+        <div className="absolute top-4 right-96 w-80">
+          <LevelProgressTracker
+            currentLevel={currentLevel}
+            correctAnswers={correctAnswersInLevel}
+            requiredAnswers={5}
+            levelName={currentLevelData.name}
+          />
+        </div>
+      )}
+
+      {/* Tower Selection Panel */}
+      <div className="w-full lg:w-80 bg-slate-800 border-l border-slate-700 p-6">
+        <h3 className="text-xl font-bold text-amber-400 mb-4">Defense Arsenal</h3>
+        
+        <div className="space-y-3 mb-6">
+          {Object.entries(towerTypes).map(([type, config]) => (
+            <button
+              key={type}
+              onClick={() => setSelectedTowerType(type as Tower['type'])}
+              className={`w-full p-3 rounded-lg border-2 transition-all ${
+                selectedTowerType === type
+                  ? 'border-amber-500 bg-amber-500/20'
+                  : 'border-slate-600 hover:border-slate-500'
+              }`}
+              disabled={gold < config.cost}
+            >
+              <div className="flex items-center justify-between">
+                <div className="text-left">
+                  <div className="font-semibold text-white">{config.name}</div>
+                  <div className="text-xs text-slate-400">
+                    {config.description}
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Damage: {config.damage} | Range: {config.range}
+                  </div>
+                </div>
+                <div className="text-amber-400 font-bold">{config.cost}g</div>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div className="bg-slate-700/50 rounded-lg p-4">
+          <h4 className="font-semibold text-amber-400 mb-2">Game Stats</h4>
+          <div className="space-y-1 text-sm">
+            <div className="flex justify-between">
+              <span className="text-slate-300">Enemies Defeated:</span>
+              <span className="text-white">{Math.floor(score / 100)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-300">Defense Nodes:</span>
+              <span className="text-white">{towers.length}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-300">Current Wave:</span>
+              <span className="text-white">{wave}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 text-xs text-slate-400">
+          <p>Click on the digital grid to deploy defense nodes</p>
+          <p>Answer security protocols for bonus credits!</p>
+        </div>
+      </div>
+
+      {/* Security Quiz Modal */}
+      {showQuiz && currentQuiz && (
+        <SecurityQuizModal
+          question={currentQuiz}
+          onAnswer={handleQuizAnswer}
+          onClose={() => {
+            setShowQuiz(false);
+            setCurrentQuiz(null);
+            onGameStateChange('playing');
+          }}
+        />
+      )}
+
+      {/* Security Tip Modal */}
+      {showSecurityTip && currentSecurityTip && (
+        <SecurityTipModal
+          tip={currentSecurityTip}
+          onClose={handleSecurityTipClose}
+        />
+      )}
+    </div>
+  );
+};
+
+export default TowerDefenseGame;
