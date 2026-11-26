@@ -8,4 +8,8 @@ Early prototype. Only the app shell and game-state code were reviewed for this R
 ## Stack
 React, TypeScript, Lucide icons.
 
+## License
+
+MIT License. See [LICENSE](LICENSE).
+
 Built by [Gouresh Kamble](https://github.com/gkambl).
